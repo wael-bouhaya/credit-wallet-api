@@ -1,58 +1,217 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Credit Wallet API - Laravel
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+## Informations Étudiant
+* **Nom :** Bouhaya Wael
+* **Établissement :** ENSAM Casablanca - Université Hassan II
+* **Filière :** Département Génie Informatique et IA
+* **Enseignant :** Dr. WARDI Ahmed
 
-## About Laravel
+---
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Présentation du Projet
+Ce projet consiste en la création d'une API REST de gestion de portefeuille de crédits avec authentification JWT.  
+L'objectif est de mettre en pratique :
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+- L'authentification sécurisée avec **JWT (JSON Web Token)**
+- Le contrôle d'accès par **rôle (user / admin)**
+- La gestion d'un **portefeuille de points** avec règles métier
+- Le respect des standards REST
+- Une structure de réponse **JSON normalisée**
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+---
 
-## Learning Laravel
+## Technologies Utilisées
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+- **Laravel**
+- **PHP**
+- **MySQL**
+- **php-open-source-saver/jwt-auth**
+- **Postman** (tests API)
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+---
 
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
+## Aperçu du Code Source
 
-## Agentic Development
+### 1️. Modèle & Migrations (`User`)
 
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+Deux migrations séparées : la migration par défaut de Laravel et une migration dédiée pour les colonnes métier.
+```php
+// database/migrations/xxxx_add_solde_role_to_users_table.php
+public function up(): void {
+    Schema::table('users', function (Blueprint $table) {
+        $table->integer('solde')->default(0);
+        $table->enum('role', ['user', 'admin'])->default('user');
+    });
+}
+```
+```php
+// app/Models/User.php
+class User extends Authenticatable implements JWTSubject
+{
+    protected $fillable = ['name', 'email', 'password', 'role', 'solde'];
 
-```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+    public function getJWTIdentifier() { return $this->getKey(); }
+    public function getJWTCustomClaims() { return []; }
+}
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+---
 
-## Contributing
+### 2️. Routes API (`api.php`)
+```php
+// Auth — public
+Route::prefix('auth')->group(function () {
+    Route::post('/register', [AuthController::class, 'register']);
+    Route::post('/login',    [AuthController::class, 'login']);
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+    Route::middleware('auth:api')->group(function () {
+        Route::get('/me',      [AuthController::class, 'me']);
+        Route::post('/logout', [AuthController::class, 'logout']);
+    });
+});
 
-## Code of Conduct
+// Wallet — utilisateur authentifié
+Route::middleware('auth:api')->prefix('wallet')->group(function () {
+    Route::get('/',       [WalletController::class, 'index']);
+    Route::post('/spend', [WalletController::class, 'spend']);
+});
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+// Admin uniquement
+Route::middleware(['auth:api', 'role:admin'])->prefix('admin/wallet')->group(function () {
+    Route::post('/{user}/credit', [AdminWalletController::class, 'credit']);
+    Route::post('/{user}/debit',  [AdminWalletController::class, 'debit']);
+});
+```
 
-## Security Vulnerabilities
+---
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+### 3️. Contrôleurs
 
-## License
+#### ➤ Authentification (POST /api/auth/login)
+```php
+public function login(Request $request) {
+    $credentials = $request->only('email', 'password');
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+    if (!$token = auth('api')->attempt($credentials)) {
+        return response()->json(['error' => 'Identifiants invalides'], 401);
+    }
+
+    return response()->json([
+        'token' => $token,
+        'role'  => auth('api')->user()->role,
+    ]);
+}
+```
+
+#### ➤ Dépense de points (POST /api/wallet/spend)
+```php
+public function spend(Request $request) {
+    $user = auth('api')->user();
+
+    if ($request->montant > $user->solde) {
+        return response()->json(['error' => 'Solde insuffisant'], 422);
+    }
+
+    $user->solde -= $request->montant;
+    $user->save();
+
+    return response()->json(['solde' => $user->solde]);
+}
+```
+
+#### ➤ Crédit admin (POST /api/admin/wallet/{user}/credit)
+```php
+public function credit(Request $request, User $user) {
+    $user->solde += $request->montant;
+    $user->save();
+
+    return response()->json(['solde' => $user->solde]);
+}
+```
+
+---
+
+### 4️. Middleware CheckRole
+```php
+public function handle(Request $request, Closure $next, string $role) {
+    if (auth('api')->user()->role !== $role) {
+        return response()->json(['error' => 'Accès refusé'], 403);
+    }
+    return $next($request);
+}
+```
+
+---
+
+## Tests Postman (Endpoints)
+
+### Cas de Succès
+
+| Méthode | URI | Action | Status |
+|---------|-----|--------|--------|
+| **POST** | `/api/auth/register` | Inscription | `201 Created` |
+| **POST** | `/api/auth/login` | Connexion + token JWT | `200 OK` |
+| **GET** | `/api/auth/me` | Profil utilisateur connecté | `200 OK` |
+| **POST** | `/api/auth/logout` | Déconnexion | `200 OK` |
+| **GET** | `/api/wallet` | Consulter le solde | `200 OK` |
+| **POST** | `/api/wallet/spend` | Dépenser des points | `200 OK` |
+| **POST** | `/api/admin/wallet/{id}/credit` | Créditer un utilisateur | `200 OK` |
+| **POST** | `/api/admin/wallet/{id}/debit` | Débiter un utilisateur | `200 OK` |
+
+---
+
+### Gestion des Erreurs
+
+| Scénario | Status |
+|----------|--------|
+| Accès sans token | `401 Unauthorized` |
+| Montant inférieur à 10 points | `422 Unprocessable` |
+| Solde insuffisant (spend) | `422 Unprocessable` |
+| Solde insuffisant (debit admin) | `422 Unprocessable` |
+| Accès route admin avec rôle user | `403 Forbidden` |
+
+---
+
+## Structure des Livrables
+```
+app/
+ ├── Models/
+ │   └── User.php
+ ├── Http/
+ │   ├── Controllers/
+ │   │   ├── AuthController.php
+ │   │   ├── WalletController.php
+ │   │   └── AdminWalletController.php
+ │   └── Middleware/
+ │       └── CheckRole.php
+
+database/
+ └── migrations/
+     ├── xxxx_create_users_table.php
+     └── xxxx_add_solde_role_to_users_table.php
+
+routes/
+ └── api.php
+
+config/
+ └── auth.php
+```
+
+---
+
+## Lancement du Projet
+```bash
+git clone <repository_url>
+cd credit-wallet-api
+composer install
+cp .env.example .env
+php artisan key:generate
+php artisan jwt:secret
+php artisan migrate
+php artisan serve
+```
+
+L'API sera accessible via :
+```
+http://127.0.0.1:8000/api
+```
